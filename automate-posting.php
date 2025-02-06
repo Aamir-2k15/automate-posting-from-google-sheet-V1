@@ -2,7 +2,7 @@
 /*
 Plugin Name: Automate Posting from Google Sheet.
 Description: Creates posts from a Google Sheet also considers date and time. Needs Google Sheet URL & API Key.
-Version: 1.0
+Version: 2.1
 Author:  Aamir
 */
 
@@ -29,46 +29,53 @@ function automate_posting_content()
         <?php include_once 'includes/class-wp-form-builder.php'; ?>
         <?php
        
+       $automate_posting_settings = get_option('automate_posting_settings', []);
 
-        $automate_posting_settings = get_option('automate_posting_settings', []);
-        if (isset($_POST['save_settings'])) {
-            // update_option('automate_posting_settings', $_POST);
-            
-            // $redirect_url = wp_get_referer() ? wp_get_referer() : (isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : admin_url('options-general.php'));
-            // $redirect_url = add_query_arg('saved', 'true', $redirect_url);
-            
-            // wp_redirect($redirect_url);
-            echo '<div class="updated notice is-dismissible"><p>Settings Saved!</p></div>';
-            // exit;           
-            
-        }
+if (isset($_POST['save_settings'])) {
+    // Sanitize input before saving
+    $sanitized_settings = array_map('sanitize_text_field', $_POST);
 
-        // if (isset($_GET['saved']) && $_GET['saved'] === 'true') {
-        //     echo '<div class="updated notice is-dismissible"><p>Settings Saved!</p></div>';
-        // }
-        
-        ?>
+    update_option('automate_posting_settings', $sanitized_settings);
+}
+       ?>
         <div id="response" class="notice notice-success is-dismissible" style="display:none;"></div>
 
         <form action="" method="post">
             <?php wp_nonce_field('automate_posting_action', 'automate_posting_nonce'); ?>
             <input type="hidden" name="action" value="automate_posting">
 <?php
-// Instantiating the WPFormBuilder class   
+@$file_url_value = isset($saved_settings['file_url']) ? $saved_settings['file_url'] : $_POST['file_url'];
+@$api_key_value = isset($saved_settings['api_key']) ? $saved_settings['api_key'] :  $_POST['api_key'];
+@$sheet_name_value = isset($saved_settings['sheet_name']) ? $saved_settings['sheet_name'] : $_POST['sheet_name'];
+@$sheet_range_value = isset($saved_settings['sheet_range']) ? $saved_settings['sheet_range'] :  $_POST['sheet_range'];
 $form_builder = new WpFormBuilder();  
 $form_builder->field([
     'name' => 'file_url',
     'id' => 'file_url',
     'label' => 'Google Sheets File URL',
     'type' => 'text',
-    'value' => $saved_settings['file_url'],
+    'value' => $file_url_value,
 ]);
 $form_builder->field([
     'name' => 'api_key',
     'id' => 'api_key',
     'label' => 'Google Sheets API Key',
     'type' => 'text',
-    'value' => $saved_settings['api_key'],
+    'value' => $api_key_value,
+]);
+$form_builder->field([
+    'name' => 'sheet_name',
+    'id' => 'sheet_name',
+    'label' => 'Google Sheet Name',
+    'type' => 'text',
+    'value' => $sheet_name_value,
+]);
+$form_builder->field([
+    'name' => 'sheet_range',
+    'id' => 'sheet_range',
+    'label' => 'Google Sheet Range',
+    'type' => 'text',
+    'value' => $sheet_range_value,
 ]);
  
 // Render the form
@@ -126,14 +133,14 @@ document.getElementById("sync_google_sheet").addEventListener("click", function(
                 if (data.success) {
                     showNotification(data.data, "success"); 
                 } else {
-                    showNotification("❌ Error: " + data.data, "error");
+                    showNotification("Error: " + data.data, "error");
                 }
             } catch (error) {
                 // Handle cases where response is not JSON (e.g., HTML error page)
-                showNotification("❌ Invalid response from server. Please check the Google Sheets URL.", "error");
+                showNotification("Invalid response from server. Please check the Google Sheets URL.", "error");
             }
         })
-        .catch(error => showNotification("❌ Request Failed: " + error, "error"))
+        .catch(error => showNotification("Request Failed: " + error, "error"))
         .finally(() => {
             this.disabled = false;
             this.innerText = "Open & Sync Google Sheet";
@@ -163,25 +170,31 @@ function sync_with_google_sheet()
 
     $sheet_id = $matches[1];
     $api_key = $saved_settings['api_key'];
-    $range = "Sheet1!A:F";
+    // $range = "Sheet1!A:F";
+    $sheet_name =  $saved_settings['sheet_name'];
+    $sheet_range = $saved_settings['sheet_range'];
+    $range = "$sheet_name!$sheet_range";
 
     // Fetch Google Sheets data  
     $fetch_url = "https://sheets.googleapis.com/v4/spreadsheets/$sheet_id/values/$range?key=$api_key";
+
+
     $response = wp_remote_get($fetch_url);
+    // $response = file_get_contents($fetch_url);
 
     if (is_wp_error($response)) {
-        wp_send_json_error("❌ Request Failed: " . $response->get_error_message());
+        wp_send_json_error("Request Failed: " . $response->get_error_message());
     }
 
     $response_body = wp_remote_retrieve_body($response);
     $data = json_decode($response_body, true);
 
     if (json_last_error() !== JSON_ERROR_NONE) {
-        wp_send_json_error("❌ Invalid response from Google Sheets API. Please check your spreadsheet URL.");
+        wp_send_json_error("Invalid response from Google Sheets API. Please check your spreadsheet URL. $fetch_url");
     }
 
     if (!isset($data['values'])) {
-        wp_send_json_error("❌ Failed to fetch data from Google Sheets. Make sure the spreadsheet is public.");
+        wp_send_json_error("Failed to fetch data from Google Sheets. Make sure the spreadsheet is public.");
     }
 
     $values = $data['values'];
@@ -193,7 +206,7 @@ function sync_with_google_sheet()
     $date_col = array_search('Date', $header);
 
     if ($title_col === false || $body_col === false || $category_col === false || $time_col === false || $date_col === false) {
-        wp_send_json_error("❌ Required columns (Title, Body, Category, Time, Date) not found.");
+        wp_send_json_error("Required columns (Title, Body, Category, Time, Date) not found.");
     }
 
     $posts_created = 0;
@@ -209,8 +222,13 @@ function sync_with_google_sheet()
 
         if (!empty($body)) {
             // Check if post with the same title already exists
-            $existing_post = get_page_by_title($title, OBJECT, $saved_settings['create_post_types']);
-            if ($existing_post) {
+            $existing_post_query = new WP_Query([
+                'post_type'   => $post_type,
+                'title'       => trim(strtolower($title)),
+                'posts_per_page' => 1,
+            ]);
+            
+            if ($existing_post_query->have_posts()) {
                 $skipped_titles[] = $title;
                 continue;
             }
@@ -276,10 +294,10 @@ function sync_with_google_sheet()
     // Prepare response message
     $message = "";
     if ($posts_created > 0) {
-        $message .= "✅ Created $posts_created new post(s):<br><ol><li>" . implode("</li><li>", $created_titles) . "</li></ol>";
+        $message .= " Created $posts_created new post(s):<br><ol><li>" . implode("</li><li>", $created_titles) . "</li></ol>";
     }
     if (!empty($skipped_titles)) {
-        $message .= "❌ Skipped duplicate titles:<br><ol><li>" . implode("</li><li>", $skipped_titles) . "</li></ol>";
+        $message .= "<div style='color:red'>Skipped duplicate titles:</div><br><ol><li>" . implode("</li><li>", $skipped_titles) . "</li></ol>";
     }
 
     wp_send_json_success($message);
